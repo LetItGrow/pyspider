@@ -117,9 +117,9 @@ def cli(ctx, **kwargs):
                 os.mkdir(kwargs['data_path'])
             if db in ('taskdb', 'resultdb'):
                 kwargs[db] = utils.Get(lambda db=db: connect_database('sqlite+%s://' % (db)))
-            else:
-                kwargs[db] = utils.Get(lambda db=db: connect_database('sqlite+%s:///%s/%s.db' % (
-                    db, kwargs['data_path'], db[:-2])))
+            elif db in ('projectdb', ):
+                kwargs[db] = utils.Get(lambda db=db: connect_database('local+%s://%s' % (
+                    db, os.path.join(os.path.dirname(__file__), 'libs/bench.py'))))
         else:
             if not os.path.exists(kwargs['data_path']):
                 os.mkdir(kwargs['data_path'])
@@ -228,7 +228,7 @@ def scheduler(ctx, xmlrpc, xmlrpc_host, xmlrpc_port,
 @click.pass_context
 def fetcher(ctx, xmlrpc, xmlrpc_host, xmlrpc_port, poolsize, proxy, user_agent,
             timeout, phantomjs_endpoint, splash_endpoint, fetcher_cls,
-            async=True, get_object=False, no_input=False):
+            async_mode=True, get_object=False, no_input=False):
     """
     Run Fetcher.
     """
@@ -242,7 +242,7 @@ def fetcher(ctx, xmlrpc, xmlrpc_host, xmlrpc_port, poolsize, proxy, user_agent,
         inqueue = g.scheduler2fetcher
         outqueue = g.fetcher2processor
     fetcher = Fetcher(inqueue=inqueue, outqueue=outqueue,
-                      poolsize=poolsize, proxy=proxy, async=async)
+                      poolsize=poolsize, proxy=proxy, async_mode=async_mode)
     fetcher.phantomjs_proxy = phantomjs_endpoint or g.phantomjs_proxy
     fetcher.splash_endpoint = splash_endpoint
     if user_agent:
@@ -362,7 +362,7 @@ def webui(ctx, host, port, cdn, scheduler_rpc, fetcher_rpc, max_rate, max_burst,
     else:
         # get fetcher instance for webui
         fetcher_config = g.config.get('fetcher', {})
-        webui_fetcher = ctx.invoke(fetcher, async=False, get_object=True, no_input=True, **fetcher_config)
+        webui_fetcher = ctx.invoke(fetcher, async_mode=False, get_object=True, no_input=True, **fetcher_config)
 
         app.config['fetch'] = lambda x: webui_fetcher.fetch(x)
 
@@ -556,22 +556,13 @@ def bench(ctx, fetcher_num, processor_num, result_worker_num, run_in, total, sho
     if not all_test and not all_bench:
         return
 
-    project_name = '__bench_test__'
+    project_name = 'bench'
 
     def clear_project():
         g.taskdb.drop(project_name)
-        g.projectdb.drop(project_name)
         g.resultdb.drop(project_name)
 
     clear_project()
-    g.projectdb.insert(project_name, {
-        'name': project_name,
-        'status': 'RUNNING',
-        'script': bench.bench_script % {'total': total, 'show': show},
-        'rate': total,
-        'burst': total,
-        'updatetime': time.time()
-    })
 
     # disable log
     logging.getLogger().setLevel(logging.ERROR)
@@ -632,6 +623,9 @@ def bench(ctx, fetcher_num, processor_num, result_worker_num, run_in, total, sho
             "project": project_name,
             "taskid": "on_start",
             "url": "data:,on_start",
+            "fetch": {
+                "save": {"total": total, "show": show}
+            },
             "process": {
                 "callback": "on_start",
             },
